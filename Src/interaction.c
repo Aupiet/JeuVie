@@ -46,6 +46,7 @@ void print_help(const char *progname) {
     printf("  --boundary <mode>    Boundary mode: edge, torus, mirror, alive (default: edge)\n");
     printf("  --in <file>          Input file for initial grid\n");
     printf("  --out <file>         Output file for final state\n");
+    printf("  --thread <N>         Number of thread\n");
     printf("  --help               Show this help message\n");
     printf("\nExample:\n");
     printf("  %s --width 320 --height 240 --gens 500 --boundary torus \\\n", progname);
@@ -61,6 +62,7 @@ int parse_args(int argc, char **argv, options_t *opts) {
     opts->boundary_mode = 1;
     opts->input_file = NULL;
     opts->output_file = NULL;
+    opts->thread = 1;
 
     const struct option longopts[] = {
         {"width",       required_argument, 0, 'w'},
@@ -70,6 +72,7 @@ int parse_args(int argc, char **argv, options_t *opts) {
         {"boundary",    required_argument, 0, 'b'},
         {"in",          required_argument, 0, 'i'},
         {"out",         required_argument, 0, 'o'},
+        {"thread",      required_argument, 0, 't'},
         {"help",        no_argument,       0, '?'},
         {0,0,0,0}
     };
@@ -93,6 +96,7 @@ int parse_args(int argc, char **argv, options_t *opts) {
                 break;
             case 'i': opts->input_file = strdup(optarg); break;
             case 'o': opts->output_file = strdup(optarg); break;
+            case 't': opts->thread = atoi(optarg); break;
             case '?': print_help(argv[0]); exit(0);
             default:
                 fprintf(stderr, "Try '%s --help' for usage.\n", argv[0]);
@@ -104,38 +108,31 @@ int parse_args(int argc, char **argv, options_t *opts) {
 }
 
 
-void showgrid(grid_t *grid) {
-    // Efface l’écran et replace le curseur
-    printf("\033[H");
+void showgrid(info_t *info) {
+    grid_t *grid = info->grid;
+    const char *alive = "\u2588";
+    const char *dead = " ";
 
-    const char *alive = "\u2588"; // Bloc plein
-    const char *dead  = " ";
+    // Taille estimée : 3 octets par cellule + '\n' par ligne + 1 final
+    info->local_size = (size_t)(grid->width * 3 + 1) * (info->idxend - info->idxstart) + 1;
+    info->local_buf = (char *)malloc(info->local_size);
+    if (!info->local_buf) return;
 
-    // Taille max du buffer :
-    // 3 octets max par cellule (UTF-8) + 1 pour le \n par ligne + 1 final
-    size_t bufsize = (size_t)(grid->width * 3 + 1) * grid->height + 1;
-    char *dis = (char *)malloc(bufsize);
-    if (!dis) return;
     size_t idx = 0;
-
-    for (int y = 0; y < grid->height; y++) {
+    for (int y = info->idxstart; y < info->idxend; y++) {
         for (int x = 0; x < grid->width; x++) {
-            size_t bit_index = (size_t)y * (size_t)grid->width + (size_t)x;
+            size_t bit_index = (size_t)y * grid->width + x;
             size_t uint64_index = bit_index / BITS_PER_UINT64;
             size_t bit_offset = bit_index % BITS_PER_UINT64;
             int state = (grid->cells[uint64_index] >> bit_offset) & 1;
             const char *symbol = state ? alive : dead;
             size_t len = strlen(symbol);
-            memcpy(&dis[idx], symbol, len);
+            memcpy(&info->local_buf[idx], symbol, len);
             idx += len;
         }
-        dis[idx++] = '\n';
+        info->local_buf[idx++] = '\n';
     }
-    dis[idx] = '\0';
-
-    fwrite(dis, 1, idx, stdout);
-    fflush(stdout);
-    free(dis);
+    info->local_buf[idx] = '\0';
 }
 
 

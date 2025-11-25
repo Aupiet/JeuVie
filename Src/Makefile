@@ -1,37 +1,43 @@
-# Variables
+# ====== Variables ======
 CC = gcc
 CFLAGS = -Wall -g
-SOURCES = main.c simulation.c interaction.c 
+SOURCES = main.c simulation.c interaction.c
 OBJECTS = $(SOURCES:.c=.o)
 TARGET = ../life_game.exe
 
-# Règle par défaut
+# Version STAT
+TARGET_STAT = ../life_game_stat.exe
+CFLAGS_STAT = $(CFLAGS) -DSTAT
+
+# ====== Règle par défaut ======
 all: $(TARGET)
 
-# Lien de l'exécutable
-# $@ -> $(TARGET)
-# $^ -> $(OBJECTS)
+# ====== Lien de l'exécutable normal ======
 $(TARGET): $(OBJECTS)
 	$(CC) -o $@ $^
 	rm -f $(OBJECTS)
-	
-# Compilation des fichiers .c en .o
-# $< -> Premier element des pr
+
+# ====== Lien de l'exécutable STAT ======
+stat: CFLAGS := $(CFLAGS_STAT)
+stat: $(TARGET_STAT)
+
+$(TARGET_STAT): $(OBJECTS)
+	$(CC) -o $@ $^
+	rm -f $(OBJECTS)
+
+# ====== Compilation des fichiers .c ======
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Déclaration des cibles phony
-.PHONY: all clean fclean re
+# ====== Nettoyage ======
+.PHONY: all clean fclean re stat
 
-# Nettoyage des fichiers objets
 clean:
 	rm -f $(OBJECTS)
 
-# Nettoyage complet (fichiers objets et exécutable)
 fclean: clean
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(TARGET_STAT)
 
-# Refaire la compilation
 re: fclean all
 
 # links of tutorials

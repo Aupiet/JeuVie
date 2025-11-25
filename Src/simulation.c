@@ -87,18 +87,14 @@ int get_next_state(grid_t *grid, int x, int y) {
     }
     return 0;
 }
-void next_generation(grid_t *grid) {
+void next_generation(grid_t *grid, int debut, int fin) {
     // Compute next generation and update grid->cells and grid->shadow accordingly
-    for (int y = 0; y < grid->height; y++) {
-        for (int x = 0; x < grid->width; x++) {
+    for (int y = debut; y < fin; y++) {
+        for (int x = 0; x < grid->width ; x++) {
             int next_state = get_next_state(grid, x, y);
             set_cell_state(grid->shadow, x, y, next_state , grid->width, grid->height);
         }
     }
-    // Swap cells and shadow
-    uint64_t *temp = grid->cells;
-    grid->cells = grid->shadow;
-    grid->shadow = temp;
     return;
 }
 
@@ -109,6 +105,7 @@ grid_t* create_grid( options_t *opts) {
     int boundary_mode = opts->boundary_mode;
     int numgen = opts->numgen;
     int framrate = opts->framrate;
+    int thread = opts->thread;
     size_t total_cells = (size_t)width * (size_t)height;
     size_t total_bits = total_cells;
     size_t total_uint64s = (total_bits + BITS_PER_UINT64 - 1) / BITS_PER_UINT64;
@@ -129,7 +126,10 @@ grid_t* create_grid( options_t *opts) {
     grid->boundary_mode = boundary_mode;
     grid->numgen = numgen;
     grid->framrate = framrate;
+    grid->thread = thread;
+    #ifdef STAT
     grid->stat_gen_time = (double *)calloc((size_t)numgen, sizeof(double));
+    #endif
     if (!grid->cells || !grid->shadow) {
         free(grid->cells);
         free(grid->shadow);

@@ -12,7 +12,7 @@
 int get_cell_state(grid_t *grid, int x, int y);
 int num_neighbors(grid_t *grid, int x, int y );
 int get_next_state(grid_t *grid, int x, int y);
-void next_generation( grid_t *grid);
+void next_generation( grid_t *grid, int debut, int fin);
 DWORD WINAPI SimulationThread(LPVOID lpParam);
 grid_t* create_grid(options_t *opts);
 void free_grid(grid_t *grid);
