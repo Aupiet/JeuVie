@@ -7,6 +7,48 @@ void set_console_fullscreen() {
   }
 }
 
+// Initialise la console pour correspondre exactement à la grille
+// C'est CRUCIAL pour que WriteConsoleOutput fonctionne sans écran noir
+void init_console_for_grid(int width, int height) {
+  HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  if (hOut == INVALID_HANDLE_VALUE)
+    return;
+
+  // 1. Définir une petite fenêtre temporaire pour permettre le
+  // redimensionnement du buffer
+  SMALL_RECT minWindow = {0, 0, 1, 1};
+  SetConsoleWindowInfo(hOut, TRUE, &minWindow);
+
+  // 2. Redimensionner le buffer d'écran à la taille de la grille
+  COORD bufferSize = {(SHORT)width, (SHORT)height};
+  if (!SetConsoleScreenBufferSize(hOut, bufferSize)) {
+    // Si échec (ex: trop grand), on essaie le max possible
+    fprintf(stderr, "Warning: Could not set screen buffer size to %dx%d\n",
+            width, height);
+  }
+
+  // 3. Agrandir la fenêtre pour afficher le plus possible
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  GetConsoleScreenBufferInfo(hOut, &csbi);
+
+  SMALL_RECT windowSize = {0, 0, (SHORT)(width - 1), (SHORT)(height - 1)};
+
+  // Vérifier les limites de l'écran physique
+  COORD largest = GetLargestConsoleWindowSize(hOut);
+  if (windowSize.Right >= largest.X)
+    windowSize.Right = largest.X - 1;
+  if (windowSize.Bottom >= largest.Y)
+    windowSize.Bottom = largest.Y - 1;
+
+  SetConsoleWindowInfo(hOut, TRUE, &windowSize);
+
+  // 4. Cacher le curseur
+  CONSOLE_CURSOR_INFO cursorInfo;
+  GetConsoleCursorInfo(hOut, &cursorInfo);
+  cursorInfo.bVisible = FALSE;
+  SetConsoleCursorInfo(hOut, &cursorInfo);
+}
+
 void set_font_size(int width, int height) {
   CONSOLE_FONT_INFOEX font = {0};
   font.cbSize = sizeof(font);
@@ -25,7 +67,7 @@ void set_font_size(int width, int height) {
   }
   font.FontFamily = FF_DONTCARE;
   font.FontWeight = FW_NORMAL;
-  // wcscpy(font.FaceName, L"Consolas");
+  wcscpy(font.FaceName, L"Consolas");
   SetCurrentConsoleFontEx(GetStdHandle(STD_OUTPUT_HANDLE), FALSE, &font);
   // setup window size in full screen
   set_console_fullscreen();
@@ -123,19 +165,51 @@ int parse_args(int argc, char **argv, options_t *opts) {
   return 1;
 }
 
-// Ancienne fonction showgrid (DEPRECATED - conservée pour compatibilité mais
-// non utilisée) La nouvelle version showgrid_native est utilisée dans main.c
+void showgrid(info_t *info) {
+  grid_t *grid = info->grid;
+  const char *alive = "\u2588";
+  const char *dead = " ";
+
+  // Taille estimée : 3 octets par cellule + '\n' par ligne + 1 final
+  info->local_size =
+      (size_t)(grid->width * 3 + 1) * (info->idxend - info->idxstart) + 1;
+  info->local_buf = (char *)malloc(info->local_size);
+  if (!info->local_buf)
+    return;
+
+  size_t idx = 0;
+  for (int y = info->idxstart; y < info->idxend; y++) {
+    // Vérifier le flag d'arrêt tous les quelques lignes (pour performance)
+    if (info->stop_flag && *(info->stop_flag)) {
+      info->local_buf[idx] = '\0';
+      return; // Interrompu proprement
+    }
+
+    for (int x = 0; x < grid->width; x++) {
+      size_t bit_index = (size_t)y * grid->width + x;
+      size_t uint64_index = bit_index / BITS_PER_UINT64;
+      size_t bit_offset = bit_index % BITS_PER_UINT64;
+      int state = (grid->cells[uint64_index] >> bit_offset) & 1;
+      const char *symbol = state ? alive : dead;
+      size_t len = strlen(symbol);
+      memcpy(&info->local_buf[idx], symbol, len);
+      idx += len;
+    }
+    info->local_buf[idx++] = '\n';
+  }
+  info->local_buf[idx] = '\0';
+}
 
 // Nouvelle fonction : affichage natif Windows ultra-rapide
 void showgrid_native(info_t *info) {
   grid_t *grid = info->grid;
 
-  // Remplir le buffer CHAR_INFO directement (pas de conversion string UTF-8)
+  // Remplir le buffer CHAR_INFO directement
   int idx = 0;
   for (int y = info->idxstart; y < info->idxend; y++) {
-    // Vérifier le flag d'arrêt si présent
+    // Vérifier le flag d'arrêt
     if (info->stop_flag && *(info->stop_flag)) {
-      return; // Interrompu proprement
+      return;
     }
 
     for (int x = 0; x < grid->width; x++) {
@@ -147,12 +221,10 @@ void showgrid_native(info_t *info) {
       CHAR_INFO *cell = &info->native_buf[idx++];
 
       if (state) {
-        // Cellule vivante : bloc plein blanc
         cell->Char.UnicodeChar = L'█';
         cell->Attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE |
                            FOREGROUND_INTENSITY;
       } else {
-        // Cellule morte : espace noir
         cell->Char.UnicodeChar = L' ';
         cell->Attributes = 0;
       }

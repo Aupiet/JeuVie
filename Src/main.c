@@ -96,6 +96,9 @@ int simulation(grid_t *grid) {
         CreateThread(NULL, 0, WorkerThread, &worker_infos[t], 0, NULL);
   }
 
+  // Initialiser la console pour éviter l'écran noir
+  init_console_for_grid(grid->width, grid->height);
+
   // Pour le timing précis
   LARGE_INTEGER freq;
   QueryPerformanceFrequency(&freq);
@@ -111,6 +114,9 @@ int simulation(grid_t *grid) {
 #endif
 
   // Boucle principale de simulation
+  LARGE_INTEGER simulation_start_time;
+  QueryPerformanceCounter(&simulation_start_time);
+
   for (int gen = 0; gen < grid->numgen && !stop_requested; gen++) {
     LARGE_INTEGER frame_start, compute_end;
     QueryPerformanceCounter(&frame_start);
@@ -139,37 +145,38 @@ int simulation(grid_t *grid) {
         (double)(compute_end.QuadPart - last_display_time.QuadPart) /
         (double)freq.QuadPart;
 
+    // Calculer le temps cible absolu pour cette génération
+    double target_time = (double)(gen + 1) * frame_target;
+    double elapsed_time =
+        (double)(compute_end.QuadPart - simulation_start_time.QuadPart) /
+        (double)freq.QuadPart;
+
+    // Affichage : on affiche si le temps est écoulé, SANS se soucier du retard
+    // Le retard sera rattrapé par la boucle de wait plus bas qui ne s'activera
+    // pas
     if (time_since_last_display >= min_display_period ||
         gen == grid->numgen - 1) {
       last_display_time = compute_end;
 
-      // Assigner la fonction d'affichage et démarrer tous les threads
+      // 1. Remplir les buffers en parallèle
       for (int t = 0; t < num_threads; t++) {
         worker_infos[t].work_func = display_work;
         SetEvent(worker_infos[t].start_event);
       }
-
-      // Attendre les threads d'affichage (SANS timeout)
       WaitForMultipleObjects(num_threads, done_events, TRUE, INFINITE);
 
-      // MÉTHODE HYBRIDE : Construire string depuis native_buf pour debug
-      printf("\033[H");
+      // 2. Afficher avec WriteConsoleOutputW (Ultra rapide et Unicode correct)
       for (int t = 0; t < num_threads; t++) {
-        for (int i = 0;
-             i < worker_infos[t].buf_width * worker_infos[t].buf_height; i++) {
-          WCHAR ch = worker_infos[t].native_buf[i].Char.UnicodeChar;
-          if (ch == L'█') {
-            printf("█");
-          } else {
-            printf(" ");
-          }
-          // Nouvelle ligne tous les buf_width caractères
-          if ((i + 1) % worker_infos[t].buf_width == 0) {
-            printf("\n");
-          }
-        }
+        COORD bufSize = {(SHORT)worker_infos[t].buf_width,
+                         (SHORT)worker_infos[t].buf_height};
+        COORD bufCoord = {0, 0};
+        SMALL_RECT writeRegion = {0, (SHORT)worker_infos[t].idxstart,
+                                  (SHORT)(grid->width - 1),
+                                  (SHORT)(worker_infos[t].idxend - 1)};
+
+        WriteConsoleOutputW(hConsole, worker_infos[t].native_buf, bufSize,
+                            bufCoord, &writeRegion);
       }
-      fflush(stdout);
     } else {
 #ifdef STAT
       frames_skipped++;
@@ -187,21 +194,32 @@ int simulation(grid_t *grid) {
 #endif
 
     // Attendre le reste du temps si on a fini avant
-    double wait_time = frame_target - frame_time;
-    if (wait_time > 0) {
-      DWORD ms = (DWORD)(wait_time * 1000.0);
-      if (ms > 0) {
-        Sleep(ms);
-      }
+    // Attendre pour respecter le temps cible ABSOLU
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    elapsed_time = (double)(now.QuadPart - simulation_start_time.QuadPart) /
+                   (double)freq.QuadPart;
 
-      // Ajustement fin avec busy-wait
-      LARGE_INTEGER now;
+    if (elapsed_time < target_time) {
+      double wait_time = target_time - elapsed_time;
+      if (wait_time > 0.001) { // Sleep seulement si > 1ms
+        Sleep((DWORD)(wait_time * 1000.0));
+      }
+      // Busy wait pour la précision finale
       do {
         QueryPerformanceCounter(&now);
-        frame_time = (double)(now.QuadPart - frame_start.QuadPart) /
-                     (double)freq.QuadPart;
-      } while (frame_time < frame_target);
+        elapsed_time = (double)(now.QuadPart - simulation_start_time.QuadPart) /
+                       (double)freq.QuadPart;
+      } while (elapsed_time < target_time);
     }
+
+    LARGE_INTEGER loop_end;
+    QueryPerformanceCounter(&loop_end);
+    double effective_time = (double)(loop_end.QuadPart - frame_start.QuadPart) /
+                            (double)freq.QuadPart;
+#ifdef STAT
+    grid->stat_effective_time[gen] = effective_time;
+#endif
   }
 
   // Terminer proprement tous les threads
@@ -217,6 +235,9 @@ int simulation(grid_t *grid) {
 
   free(worker_infos);
   free(done_events);
+
+  // Nettoyage de la console (demandé par l'utilisateur) AVANT les stats
+  printf("\033[2J\033[H");
 
 #ifdef STAT
   if (frames_skipped > 0) {
@@ -237,6 +258,28 @@ BOOL WINAPI ConsoleHandler(DWORD signal) {
   }
   return FALSE;
 }
+
+#ifdef STAT
+void export_stats(grid_t *grid, int actual_gens) {
+  FILE *f = fopen("stats_gen.txt", "w");
+  if (!f) {
+    fprintf(stderr, "Failed to open stats_gen.txt for writing\n");
+    return;
+  }
+  fprintf(f,
+          "Gen\tComputation(s)\tEffective(s)\tTarget(Hz)\tReal(Hz)\tThreads\n");
+  for (int i = 0; i < actual_gens; i++) {
+    double real_hz = grid->stat_effective_time[i] > 0
+                         ? 1.0 / grid->stat_effective_time[i]
+                         : 0.0;
+    fprintf(f, "%d\t%.6f\t%.6f\t%d\t%.2f\t%d\n", i, grid->stat_gen_time[i],
+            grid->stat_effective_time[i], grid->framrate, real_hz,
+            grid->thread);
+  }
+  fclose(f);
+  printf("[STAT] Statistics exported to stats_gen.txt\n");
+}
+#endif
 
 int main(int argc, char *argv[]) {
   SetConsoleOutputCP(CP_UTF8);
@@ -312,18 +355,20 @@ int main(int argc, char *argv[]) {
     printf("Jitter: %.6f s\n", jitter);
   }
   printf("==========================\n\n");
+  printf("==========================\n\n");
+  export_stats(grid, actual_gens);
 #endif
 
   free_grid(grid);
   free(opts.input_file);
   free(opts.output_file);
 
-  // Nettoyage de la console (même si interrompu)
-  printf("\033[2J\033[H"); // Clear screen
+  // Rétablir une police lisible pour la suite
   CONSOLE_FONT_INFOEX font = {0};
   font.cbSize = sizeof(font);
-  font.dwFontSize.Y = 16; // Taille par défaut
+  font.dwFontSize.Y = 16;
   font.dwFontSize.X = 8;
+  wcscpy(font.FaceName, L"Consolas");
   SetCurrentConsoleFontEx(GetStdHandle(STD_OUTPUT_HANDLE), FALSE, &font);
 
   printf("Programme terminé.\n");

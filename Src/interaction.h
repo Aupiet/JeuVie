@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <wchar.h>
 #include <windows.h>
 
 #define MAX_MEMORY_KB 64
@@ -22,6 +23,7 @@ typedef struct {
   uint16_t thread;
 #ifdef STAT
   double *stat_gen_time;
+  double *stat_effective_time;
 #endif
 } grid_t;
 
@@ -45,18 +47,22 @@ typedef struct info_tag {
   grid_t *grid;
 
   // Buffer natif Windows pour affichage ultra-rapide
-  CHAR_INFO *native_buf; // Remplace local_buf
-  int buf_width;         // Largeur en caractères
-  int buf_height;        // Hauteur en caractères
+  CHAR_INFO *native_buf;
+  int buf_width;
+  int buf_height;
 
-  volatile int *stop_flag; // Pointeur vers flag d'arrêt partagé
+  // Legacy (conservé pour compatibilité)
+  char *local_buf;
+  size_t local_size;
+
+  volatile int *stop_flag;
 
   // Pour pool de threads persistants
   HANDLE thread;
-  HANDLE start_event;       // Signal pour démarrer le travail
-  HANDLE done_event;        // Signal pour indiquer que le travail est terminé
-  volatile int should_exit; // Flag pour terminer le thread
-  void (*work_func)(struct info_tag *); // Pointeur vers la fonction de travail
+  HANDLE start_event;
+  HANDLE done_event;
+  volatile int should_exit;
+  void (*work_func)(struct info_tag *);
 
 #ifdef STAT
   int gennum;
@@ -66,7 +72,8 @@ typedef struct info_tag {
 void print_help(const char *progname);
 int parse_args(int argc, char **argv, options_t *opts);
 void set_font_size(int width, int height);
+void init_console_for_grid(int width, int height); // Nouvelle fonction
 void set_console_fullscreen();
-void showgrid(info_t *info);        // Ancien affichage (fallback)
-void showgrid_native(info_t *info); // Nouveau affichage Windows natif
+void showgrid(info_t *info);
+void showgrid_native(info_t *info);
 #endif
